@@ -5,14 +5,14 @@ CV Screening AI Agent -- SINGLE FILE VERSION (Streamlit)
 Sab modules (config, languages, database, cv_parser, matcher,
 email_sender, email_fetcher) isi ek file mein combine kar diye gaye hain,
 taake alag-alag files manage na karni parein.
- 
+
 Run: streamlit run project_09.py
 Note: Webhook listener (Email Forwarding method) is a SEPARATE small
 Flask server and can't live inside a Streamlit app -- rakhein use
 webhook_listener.py mein alag se agar chahiye.
 =====================================================================
 """
- 
+
 # ============================== IMPORTS ==============================
 import os
 import re
@@ -27,20 +27,20 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from contextlib import contextmanager
- 
+
 import streamlit as st
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from PyPDF2 import PdfReader
 import docx
 from dotenv import load_dotenv
- 
+
 load_dotenv()
- 
+
 # ============================================================
 # SECTION 1: CONFIG
 # ============================================================
- 
+
 def _get_setting(key: str, default: str = "") -> str:
     """Value pehle Streamlit Cloud 'Secrets' se dhoondta hai (agar wahan deploy
     hai), warna .env / normal environment variable se leta hai. Isse ek hi
@@ -51,55 +51,55 @@ def _get_setting(key: str, default: str = "") -> str:
     except Exception:
         pass
     return os.getenv(key, default)
- 
- 
+
+
 # ---------------- COMPANY INFO ----------------
 COMPANY_NAME = _get_setting("COMPANY_NAME", "Your Company Name")
 COMPANY_EMAIL = _get_setting("COMPANY_EMAIL", "hr@yourcompany.com")
- 
+
 # ---------------- EMAIL RECEIVING (Method 1: IMAP Polling) ----------------
 IMAP_HOST = _get_setting("IMAP_HOST", "imap.gmail.com")
 IMAP_PORT = int(_get_setting("IMAP_PORT", "993"))
 IMAP_EMAIL = _get_setting("IMAP_EMAIL", "")          # company email jahan CVs aati hain
 IMAP_APP_PASSWORD = _get_setting("IMAP_APP_PASSWORD", "")  # Gmail App Password
- 
+
 # ---------------- EMAIL RECEIVING (Method 2: Gmail API) ----------------
 GMAIL_API_ENABLED = _get_setting("GMAIL_API_ENABLED", "false").lower() == "true"
 GMAIL_CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credentials.json")
 GMAIL_TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.json")
- 
+
 # ---------------- EMAIL RECEIVING (Method 3: Forwarding + Webhook) ----------------
 WEBHOOK_ENABLED = _get_setting("WEBHOOK_ENABLED", "false").lower() == "true"
 WEBHOOK_SECRET = _get_setting("WEBHOOK_SECRET", "change-this-secret")
 WEBHOOK_PORT = int(_get_setting("WEBHOOK_PORT", "5000"))
- 
+
 # ---------------- EMAIL SENDING (Selected/Rejected emails) ----------------
 SMTP_HOST = _get_setting("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(_get_setting("SMTP_PORT", "587"))
 SMTP_EMAIL = _get_setting("SMTP_EMAIL", "")          # from email address
 SMTP_APP_PASSWORD = _get_setting("SMTP_APP_PASSWORD", "")
- 
+
 # ---------------- INBOX CHECK INTERVAL ----------------
 CHECK_INTERVAL_MINUTES = 2   # har 2 minute baad inbox check hoga
- 
+
 # ---------------- AI MATCHING ----------------
 # Agar ANTHROPIC_API_KEY set hai to LLM-based smart matching hogi,
 # warna simple keyword-matching fallback use hogi.
 ANTHROPIC_API_KEY = _get_setting("ANTHROPIC_API_KEY", "")
 MATCH_SCORE_THRESHOLD = 70   # is se upar score = Selected
- 
+
 # ---------------- ADMIN LOGIN (default, first run pe use karein) ----------------
 DEFAULT_ADMIN_USERNAME = _get_setting("DEFAULT_ADMIN_USERNAME", "admin")
 DEFAULT_ADMIN_PASSWORD = _get_setting("DEFAULT_ADMIN_PASSWORD", "admin123")
- 
- 
+
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cv_agent.db")
 ATTACHMENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attachments")
- 
+
 # ============================================================
 # SECTION 2: LANGUAGES (Urdu / Pashto / English)
 # ============================================================
- 
+
 TRANSLATIONS = {
     "en": {
         "login_title": "Login to Dashboard",
@@ -198,25 +198,25 @@ TRANSLATIONS = {
         "language": "ژبه",
     },
 }
- 
- 
+
+
 def t(key: str, lang: str = "en") -> str:
     """Given key aur language code, translated text wapis dega.
     Agar translation na mile to English fallback dega."""
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, TRANSLATIONS["en"].get(key, key))
- 
- 
+
+
 # ============================================================
 # SECTION 3: DATABASE
 # ============================================================
- 
- 
- 
- 
+
+
+
+
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
- 
- 
+
+
 @contextmanager
 def get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -227,8 +227,8 @@ def get_conn():
         conn.commit()
     finally:
         conn.close()
- 
- 
+
+
 def init_db():
     """Pehli dafa app chalane par tables banega + default admin user."""
     with get_conn() as conn:
@@ -277,7 +277,7 @@ def init_db():
                 FOREIGN KEY (candidate_id) REFERENCES candidates (id)
             )
         """)
- 
+
         # Default admin agar koi user nahi hai
         c.execute("SELECT COUNT(*) as cnt FROM users")
         if c.fetchone()["cnt"] == 0:
@@ -286,16 +286,16 @@ def init_db():
                 (DEFAULT_ADMIN_USERNAME, _hash_password(DEFAULT_ADMIN_PASSWORD),
                  datetime.now().isoformat())
             )
- 
- 
+
+
 def verify_user(username: str, password: str) -> bool:
     with get_conn() as conn:
         row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (username,)).fetchone()
         if not row:
             return False
         return row["password_hash"] == _hash_password(password)
- 
- 
+
+
 def add_job(title, description, requirements) -> int:
     with get_conn() as conn:
         cur = conn.execute(
@@ -303,13 +303,13 @@ def add_job(title, description, requirements) -> int:
             (title, description, requirements, datetime.now().isoformat())
         )
         return cur.lastrowid
- 
- 
+
+
 def get_active_jobs():
     with get_conn() as conn:
         return conn.execute("SELECT * FROM jobs WHERE is_active = 1 ORDER BY created_at DESC").fetchall()
- 
- 
+
+
 def add_candidate(job_id, name, email, phone, cv_path, cv_text, source) -> int:
     with get_conn() as conn:
         cur = conn.execute("""
@@ -317,8 +317,8 @@ def add_candidate(job_id, name, email, phone, cv_path, cv_text, source) -> int:
             VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
         """, (job_id, name, email, phone, cv_path, cv_text, source, datetime.now().isoformat()))
         return cur.lastrowid
- 
- 
+
+
 def candidate_exists(email: str, job_id) -> bool:
     """Duplicate CV/email dobara process na ho, isliye check karta hai."""
     with get_conn() as conn:
@@ -326,16 +326,16 @@ def candidate_exists(email: str, job_id) -> bool:
             "SELECT id FROM candidates WHERE email = ? AND job_id = ?", (email, job_id)
         ).fetchone()
         return row is not None
- 
- 
+
+
 def update_candidate_score(candidate_id, score, status):
     with get_conn() as conn:
         conn.execute(
             "UPDATE candidates SET score = ?, status = ? WHERE id = ?",
             (score, status, candidate_id)
         )
- 
- 
+
+
 def get_all_candidates():
     with get_conn() as conn:
         return conn.execute("""
@@ -343,8 +343,8 @@ def get_all_candidates():
             LEFT JOIN jobs j ON c.job_id = j.id
             ORDER BY c.received_at DESC
         """).fetchall()
- 
- 
+
+
 def get_candidates_by_status(status):
     with get_conn() as conn:
         return conn.execute("""
@@ -353,8 +353,8 @@ def get_candidates_by_status(status):
             WHERE c.status = ?
             ORDER BY c.received_at DESC
         """, (status,)).fetchall()
- 
- 
+
+
 def get_dashboard_counts():
     with get_conn() as conn:
         total = conn.execute("SELECT COUNT(*) as cnt FROM candidates").fetchone()["cnt"]
@@ -362,27 +362,27 @@ def get_dashboard_counts():
         rejected = conn.execute("SELECT COUNT(*) as cnt FROM candidates WHERE status='rejected'").fetchone()["cnt"]
         pending = conn.execute("SELECT COUNT(*) as cnt FROM candidates WHERE status='pending'").fetchone()["cnt"]
         return {"total": total, "selected": selected, "rejected": rejected, "pending": pending}
- 
- 
+
+
 def log_email(candidate_id, email_type, status):
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO email_log (candidate_id, email_type, sent_at, status) VALUES (?, ?, ?, ?)",
             (candidate_id, email_type, datetime.now().isoformat(), status)
         )
- 
- 
+
+
 def get_candidate_by_id(candidate_id):
     with get_conn() as conn:
         return conn.execute("SELECT * FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
- 
- 
+
+
 # ============================================================
 # SECTION 4: CV PARSER
 # ============================================================
- 
- 
- 
+
+
+
 def extract_text_from_pdf(file_path: str) -> str:
     text = ""
     try:
@@ -394,8 +394,8 @@ def extract_text_from_pdf(file_path: str) -> str:
     except Exception as e:
         print(f"[cv_parser] PDF read error: {e}")
     return text
- 
- 
+
+
 def extract_text_from_docx(file_path: str) -> str:
     text = ""
     try:
@@ -404,8 +404,8 @@ def extract_text_from_docx(file_path: str) -> str:
     except Exception as e:
         print(f"[cv_parser] DOCX read error: {e}")
     return text
- 
- 
+
+
 def extract_text(file_path: str) -> str:
     """File extension ke hisab se sahi parser call karega."""
     ext = os.path.splitext(file_path)[1].lower()
@@ -415,19 +415,19 @@ def extract_text(file_path: str) -> str:
         return extract_text_from_docx(file_path)
     else:
         return ""
- 
- 
+
+
 def extract_email(text: str) -> str:
     match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
     return match.group(0) if match else ""
- 
- 
+
+
 def extract_phone(text: str) -> str:
     # Pakistan aur general phone number patterns
     match = re.search(r"(\+?\d{1,3}[-.\s]?)?\(?\d{3,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}", text)
     return match.group(0).strip() if match else ""
- 
- 
+
+
 def extract_name(text: str, fallback_email: str = "") -> str:
     """Simple heuristic: CV ki pehli non-empty line usually naam hoti hai."""
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -439,8 +439,8 @@ def extract_name(text: str, fallback_email: str = "") -> str:
     if fallback_email:
         return fallback_email.split("@")[0]
     return "Candidate"
- 
- 
+
+
 def parse_cv(file_path: str) -> dict:
     """Ek CV file se sara useful data nikal kar dictionary return karta hai."""
     text = extract_text(file_path)
@@ -453,47 +453,47 @@ def parse_cv(file_path: str) -> dict:
         "phone": phone,
         "name": name,
     }
- 
- 
+
+
 # ============================================================
 # SECTION 5: AI MATCHER
 # ============================================================
- 
- 
- 
+
+
+
 def _keyword_match_score(cv_text: str, requirements: str) -> float:
     """Fallback method: kitne required keywords CV mein mojood hain, uska percentage."""
     req_words = set(re.findall(r"[a-zA-Z]+", requirements.lower()))
     req_words = {w for w in req_words if len(w) > 2}  # chote words (is, to, at) ignore
     cv_words = set(re.findall(r"[a-zA-Z]+", cv_text.lower()))
- 
+
     if not req_words:
         return 0.0
- 
+
     matched = req_words.intersection(cv_words)
     score = (len(matched) / len(req_words)) * 100
     return round(score, 2)
- 
- 
+
+
 def _ai_match_score(cv_text: str, job_title: str, job_description: str, requirements: str) -> float:
     """Anthropic API se LLM based intelligent scoring."""
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
- 
+
         prompt = f"""You are a recruitment screening assistant. Compare the candidate's CV
 against the job requirements and give a match score from 0 to 100.
- 
+
 Job Title: {job_title}
 Job Description: {job_description}
 Required Skills/Qualifications: {requirements}
- 
+
 Candidate CV Text:
 {cv_text[:4000]}
- 
+
 Respond ONLY with a JSON object in this exact format, nothing else:
 {{"score": <number 0-100>, "reason": "<one short sentence>"}}"""
- 
+
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=200,
@@ -506,8 +506,8 @@ Respond ONLY with a JSON object in this exact format, nothing else:
     except Exception as e:
         print(f"[matcher] AI matching failed, falling back to keyword match: {e}")
         return None
- 
- 
+
+
 def calculate_match_score(cv_text: str, job_title: str, job_description: str, requirements: str) -> float:
     """Main function — yahi baaki app se call hoga."""
     if ANTHROPIC_API_KEY:
@@ -516,70 +516,70 @@ def calculate_match_score(cv_text: str, job_title: str, job_description: str, re
             return score
     # Fallback
     return _keyword_match_score(cv_text, requirements)
- 
- 
+
+
 def decide_status(score: float) -> str:
     return "selected" if score >= MATCH_SCORE_THRESHOLD else "rejected"
- 
- 
+
+
 # ============================================================
 # SECTION 6: EMAIL SENDER
 # ============================================================
- 
- 
- 
- 
+
+
+
+
 def _build_selected_email(candidate_name: str, job_title: str) -> tuple:
     subject = f"Congratulations! You have been shortlisted - {job_title}"
     body = f"""Dear {candidate_name},
- 
+
 Thank you for applying for the position of {job_title} at {COMPANY_NAME}.
- 
+
 We are pleased to inform you that you have been SELECTED after our initial review process.
 Our HR team will contact you shortly via phone call to schedule your interview.
- 
+
 Please keep your phone accessible over the next few days.
- 
+
 Best regards,
 HR Team
 {COMPANY_NAME}
 """
     return subject, body
- 
- 
+
+
 def _build_rejected_email(candidate_name: str, job_title: str) -> tuple:
     subject = f"Update on your application - {job_title}"
     body = f"""Dear {candidate_name},
- 
+
 Thank you for your interest in the position of {job_title} at {COMPANY_NAME}
 and for taking the time to apply.
- 
+
 After careful review of your CV, we regret to inform you that we will not be moving
 forward with your application at this time. This decision does not reflect on your
 skills or potential — we simply had a highly competitive pool of candidates for this role.
- 
+
 We encourage you to apply for future openings that match your profile.
- 
+
 Best regards,
 HR Team
 {COMPANY_NAME}
 """
     return subject, body
- 
- 
+
+
 def send_email(to_email: str, subject: str, body: str) -> bool:
     """Basic SMTP email sender. Returns True/False for success."""
     if not SMTP_EMAIL or not SMTP_APP_PASSWORD:
         print("[email_sender] SMTP credentials not configured in config.py / .env")
         return False
- 
+
     try:
         msg = MIMEMultipart()
         msg["From"] = SMTP_EMAIL
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
- 
+
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_EMAIL, SMTP_APP_PASSWORD)
@@ -588,20 +588,20 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     except Exception as e:
         print(f"[email_sender] Failed to send email to {to_email}: {e}")
         return False
- 
- 
+
+
 def notify_candidate(candidate_id: int):
     """Candidate ke status (selected/rejected) ke hisab se sahi email bhejta hai
     aur database mein log karta hai."""
     candidate = get_candidate_by_id(candidate_id)
     if not candidate:
         return False
- 
+
     job_title = candidate["job_id"]  # will resolve title below via query if needed
     with get_conn() as conn:
         job_row = conn.execute("SELECT title FROM jobs WHERE id = ?", (candidate["job_id"],)).fetchone()
     job_title = job_row["title"] if job_row else "the position"
- 
+
     if candidate["status"] == "selected":
         subject, body = _build_selected_email(candidate["name"], job_title)
         email_type = "selected"
@@ -610,21 +610,21 @@ def notify_candidate(candidate_id: int):
         email_type = "rejected"
     else:
         return False
- 
+
     success = send_email(candidate["email"], subject, body)
     log_email(candidate_id, email_type, "success" if success else "failed")
     return success
- 
- 
+
+
 # ============================================================
 # SECTION 7: EMAIL FETCHER (IMAP polling + Gmail API)
 # ============================================================
- 
- 
- 
+
+
+
 ALLOWED_EXTENSIONS = (".pdf", ".docx", ".doc")
- 
- 
+
+
 def _save_attachment(part, source_tag: str) -> str:
     filename = part.get_filename()
     if not filename:
@@ -632,18 +632,18 @@ def _save_attachment(part, source_tag: str) -> str:
     filename = decode_header(filename)[0][0]
     if isinstance(filename, bytes):
         filename = filename.decode(errors="ignore")
- 
+
     if not filename.lower().endswith(ALLOWED_EXTENSIONS):
         return ""
- 
+
     os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
     safe_name = f"{source_tag}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
     file_path = os.path.join(ATTACHMENTS_DIR, safe_name)
     with open(file_path, "wb") as f:
         f.write(part.get_payload(decode=True))
     return file_path
- 
- 
+
+
 def process_new_cv(file_path: str, sender_email: str, source: str):
     """CV parse karo, active job se match karo, DB mein save karo, email bhejo."""
     parsed = parse_cv(file_path)
@@ -651,19 +651,19 @@ def process_new_cv(file_path: str, sender_email: str, source: str):
     if not candidate_email:
         print("[email_fetcher] Skipping CV, no email found:", file_path)
         return
- 
+
     active_jobs = get_active_jobs()
     if not active_jobs:
         print("[email_fetcher] No active job posted, skipping matching for:", file_path)
         return
- 
+
     # Sabse latest active job ke against match karte hain
     job = active_jobs[0]
- 
+
     if candidate_exists(candidate_email, job["id"]):
         print(f"[email_fetcher] Candidate already processed: {candidate_email}")
         return
- 
+
     candidate_id = add_candidate(
         job_id=job["id"],
         name=parsed["name"],
@@ -673,42 +673,42 @@ def process_new_cv(file_path: str, sender_email: str, source: str):
         cv_text=parsed["text"],
         source=source,
     )
- 
+
     score = calculate_match_score(
         parsed["text"], job["title"], job["description"], job["requirements"]
     )
     status = decide_status(score)
     update_candidate_score(candidate_id, score, status)
- 
+
     # Email automatically company ki taraf se candidate ko jayegi
     notify_candidate(candidate_id)
     print(f"[email_fetcher] Processed candidate {candidate_email} -> {status} ({score})")
- 
- 
+
+
 # ---------------- METHOD 1: IMAP POLLING ----------------
 def check_inbox_imap():
     """Har baar call hone par ek dafa inbox check karta hai (unseen emails)."""
     if not IMAP_EMAIL or not IMAP_APP_PASSWORD:
         print("[email_fetcher] IMAP credentials not configured, skipping IMAP check.")
         return
- 
+
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         mail.login(IMAP_EMAIL, IMAP_APP_PASSWORD)
         mail.select("inbox")
- 
+
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK":
             mail.logout()
             return
- 
+
         for num in messages[0].split():
             status, data = mail.fetch(num, "(RFC822)")
             if status != "OK":
                 continue
             msg = email_lib.message_from_bytes(data[0][1])
             sender = email_lib.utils.parseaddr(msg.get("From"))[1]
- 
+
             for part in msg.walk():
                 if part.get_content_maintype() == "multipart":
                     continue
@@ -717,32 +717,32 @@ def check_inbox_imap():
                 file_path = _save_attachment(part, "imap")
                 if file_path:
                     process_new_cv(file_path, sender, "imap")
- 
+
         mail.logout()
     except Exception as e:
         print(f"[email_fetcher] IMAP check failed: {e}")
- 
- 
+
+
 # ---------------- METHOD 2: GMAIL API ----------------
 def check_inbox_gmail_api():
     """Gmail API se naye unread messages check karta hai (agar enabled ho).
     Requires: credentials.json (OAuth client) file GMAIL_CREDENTIALS_FILE par."""
     if not GMAIL_API_ENABLED:
         return
- 
+
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
         import base64
- 
+
         SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
         creds = None
- 
+
         if os.path.exists(GMAIL_TOKEN_FILE):
             creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, SCOPES)
- 
+
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
@@ -754,11 +754,11 @@ def check_inbox_gmail_api():
                 creds = flow.run_local_server(port=0)
             with open(GMAIL_TOKEN_FILE, "w") as token_file:
                 token_file.write(creds.to_json())
- 
+
         service = build("gmail", "v1", credentials=creds)
         results = service.users().messages().list(userId="me", q="is:unread has:attachment").execute()
         messages = results.get("messages", [])
- 
+
         for m in messages:
             msg = service.users().messages().get(userId="me", id=m["id"]).execute()
             headers = msg["payload"].get("headers", [])
@@ -766,7 +766,7 @@ def check_inbox_gmail_api():
             for h in headers:
                 if h["name"] == "From":
                     sender = h["value"]
- 
+
             parts = msg["payload"].get("parts", [])
             for part in parts:
                 filename = part.get("filename")
@@ -786,31 +786,31 @@ def check_inbox_gmail_api():
                     with open(file_path, "wb") as f:
                         f.write(file_data)
                     process_new_cv(file_path, sender, "gmail_api")
- 
+
             # Mark as read so we don't reprocess
             service.users().messages().modify(
                 userId="me", id=m["id"], body={"removeLabelIds": ["UNREAD"]}
             ).execute()
- 
+
     except Exception as e:
         print(f"[email_fetcher] Gmail API check failed: {e}")
- 
- 
+
+
 def run_all_checks():
     """Yeh function scheduler har 2 minute baad call karega — dono methods check honge."""
     print(f"[email_fetcher] Checking inbox at {datetime.now().isoformat()}")
     check_inbox_imap()
     check_inbox_gmail_api()
- 
- 
+
+
 # ============================================================
 # SECTION 8: STREAMLIT APP
 # ============================================================
- 
+
 import streamlit as st
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
- 
+
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
     page_title=f"{COMPANY_NAME} - CV Screening Agent",
@@ -818,20 +818,20 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
- 
+
 # ---------------- INIT DATABASE ----------------
 init_db()
- 
+
 # ---------------- PROFESSIONAL CSS ----------------
 CUSTOM_CSS = """
 <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
- 
+
     .main {
         background-color: #f4f6f9;
     }
- 
+
     .app-navbar {
         background: linear-gradient(90deg, #0f172a 0%, #1e3a8a 100%);
         padding: 18px 28px;
@@ -849,7 +849,7 @@ CUSTOM_CSS = """
         margin: 2px 0 0 0;
         font-size: 14px;
     }
- 
+
     .metric-card {
         background: #ffffff;
         border-radius: 12px;
@@ -868,7 +868,7 @@ CUSTOM_CSS = """
         color: #64748b;
         font-size: 14px;
     }
- 
+
     .status-selected {
         background-color: #dcfce7;
         color: #166534;
@@ -893,7 +893,7 @@ CUSTOM_CSS = """
         font-size: 12px;
         font-weight: 600;
     }
- 
+
     section[data-testid="stSidebar"] {
         background-color: #0f172a;
     }
@@ -903,7 +903,7 @@ CUSTOM_CSS = """
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
- 
+
 # ---------------- SESSION STATE DEFAULTS ----------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -911,8 +911,8 @@ if "lang" not in st.session_state:
     st.session_state.lang = "en"
 if "scheduler_started" not in st.session_state:
     st.session_state.scheduler_started = False
- 
- 
+
+
 # ---------------- BACKGROUND SCHEDULER (har 2 min inbox check) ----------------
 def start_scheduler():
     if not st.session_state.scheduler_started:
@@ -925,10 +925,10 @@ def start_scheduler():
         )
         scheduler.start()
         st.session_state.scheduler_started = True
- 
- 
+
+
 start_scheduler()
- 
+
 # ---------------- LANGUAGE SELECTOR (always visible, even on login) ----------------
 lang_options = {"English": "en", "اردو (Urdu)": "ur", "پښتو (Pashto)": "ps"}
 with st.sidebar:
@@ -939,14 +939,14 @@ with st.sidebar:
         index=list(lang_options.values()).index(st.session_state.lang),
     )
     st.session_state.lang = lang_options[selected_lang_label]
- 
+
 lang = st.session_state.lang
- 
- 
+
+
 def T(key):
     return t(key, lang)
- 
- 
+
+
 # ---------------- NAVBAR (Title/Subtitle always in English) ----------------
 def render_navbar():
     st.markdown(f"""
@@ -955,8 +955,8 @@ def render_navbar():
             <p>Automated CV Screening &amp; Candidate Communication System</p>
         </div>
     """, unsafe_allow_html=True)
- 
- 
+
+
 # ---------------- LOGIN PAGE ----------------
 def login_page():
     render_navbar()
@@ -971,8 +971,8 @@ def login_page():
                 st.rerun()
             else:
                 st.error(T("login_error"))
- 
- 
+
+
 # ---------------- DASHBOARD PAGE ----------------
 def dashboard_page():
     counts = get_dashboard_counts()
@@ -985,14 +985,14 @@ def dashboard_page():
         st.markdown(f'<div class="metric-card"><h2>{counts["rejected"]}</h2><p>{T("rejected_count")}</p></div>', unsafe_allow_html=True)
     with c4:
         st.markdown(f'<div class="metric-card"><h2>{counts["pending"]}</h2><p>{T("pending_count")}</p></div>', unsafe_allow_html=True)
- 
+
     st.write("")
     if st.button("🔄 " + T("check_inbox_now")):
         with st.spinner("Checking inbox..."):
             run_all_checks()
         st.success("Inbox checked.")
         st.rerun()
- 
+
     st.write("")
     st.markdown("#### Recent Candidates")
     rows = get_all_candidates()
@@ -1003,8 +1003,8 @@ def dashboard_page():
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.info("No candidates received yet.")
- 
- 
+
+
 # ---------------- POST JOB PAGE ----------------
 def post_job_page():
     st.markdown(f"#### {T('nav_post_job')}")
@@ -1019,7 +1019,7 @@ def post_job_page():
                 st.success(T("job_posted_success"))
             else:
                 st.error("Job title and requirements are required.")
- 
+
     st.markdown("#### Active Jobs")
     jobs = get_active_jobs()
     if jobs:
@@ -1027,8 +1027,8 @@ def post_job_page():
                      use_container_width=True, hide_index=True)
     else:
         st.info("No jobs posted yet.")
- 
- 
+
+
 # ---------------- CANDIDATES / SELECTED / REJECTED PAGES ----------------
 def candidates_table_page(status_filter=None, title_key="nav_candidates"):
     st.markdown(f"#### {T(title_key)}")
@@ -1036,7 +1036,7 @@ def candidates_table_page(status_filter=None, title_key="nav_candidates"):
     if not rows:
         st.info("No records found.")
         return
- 
+
     for r in rows:
         r = dict(r)
         badge_class = f"status-{r['status']}"
@@ -1052,8 +1052,8 @@ def candidates_table_page(status_filter=None, title_key="nav_candidates"):
                 if st.button(T("resend_email"), key=f"resend_{r['id']}"):
                     notify_candidate(r["id"])
                     st.success("Email sent.")
- 
- 
+
+
 # ---------------- SETTINGS PAGE ----------------
 def settings_page():
     st.markdown(f"#### {T('settings_title')}")
@@ -1063,15 +1063,16 @@ def settings_page():
     st.write(f"**Webhook enabled:** {'Yes' if WEBHOOK_ENABLED else 'No'}")
     st.write(f"**AI Matching:** {'Claude API' if ANTHROPIC_API_KEY else 'Keyword fallback'}")
     st.write(f"**Match score threshold:** {MATCH_SCORE_THRESHOLD}")
-    st.info("Edit the .env file to change credentials and settings. Restart the app after changes.")
- 
- 
+    st.info("Settings ko update karne ke liye: Streamlit Cloud dashboard -> Manage app -> "
+            "Settings -> Secrets mein values edit karein, phir app khud reboot ho jayegi.")
+
+
 # ---------------- MAIN APP ROUTING ----------------
 if not st.session_state.logged_in:
     login_page()
 else:
     render_navbar()
- 
+
     with st.sidebar:
         st.markdown(f"### {COMPANY_NAME}")
         page = st.radio("", [
@@ -1082,7 +1083,7 @@ else:
         if st.button(T("logout")):
             st.session_state.logged_in = False
             st.rerun()
- 
+
     if page == T("nav_dashboard"):
         dashboard_page()
     elif page == T("nav_post_job"):
