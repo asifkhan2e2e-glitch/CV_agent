@@ -952,15 +952,19 @@ CUSTOM_CSS = """
         color: #e2e8f0 !important;
     }
 
-    /* Sidebar nav options -- bigger text, more spacing (sidebar width unchanged) */
+    /* Sidebar nav options -- slightly bigger text, compact spacing */
     section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        font-size: 17px !important;
-        padding: 10px 6px !important;
-        margin-bottom: 4px !important;
+        font-size: 16px !important;
+        padding: 4px 6px !important;
+        margin-bottom: 0px !important;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        font-size: 17px !important;
+        font-size: 16px !important;
         font-weight: 500;
+        margin: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 2px !important;
     }
 
     /* Softer, more professional error/warning styling (keeps red, less harsh) */
@@ -1004,7 +1008,7 @@ lang_options = {"English": "en", "اردو (Urdu)": "ur"}
 with st.sidebar:
     st.markdown("---")
     selected_lang_label = st.selectbox(
-        "🌐 Language / زبان / ژبه",
+        "🌐 Language / زبان",
         list(lang_options.keys()),
         index=list(lang_options.values()).index(st.session_state.lang),
     )
