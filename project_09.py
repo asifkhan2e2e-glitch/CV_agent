@@ -310,6 +310,33 @@ def get_active_jobs():
         return conn.execute("SELECT * FROM jobs WHERE is_active = 1 ORDER BY created_at DESC").fetchall()
 
 
+def get_job_by_id(job_id):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+
+def update_job(job_id, title, description, requirements):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET title = ?, description = ?, requirements = ? WHERE id = ?",
+            (title, description, requirements, job_id)
+        )
+
+
+def delete_job(job_id):
+    """Job ko permanently delete karta hai. Agar iske sath candidates linked
+    hain, to unka job_id NULL kar deta hai taake candidate history na toote."""
+    with get_conn() as conn:
+        conn.execute("UPDATE candidates SET job_id = NULL WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+
+def deactivate_job(job_id):
+    """Job ko 'inactive' kar deta hai — list se hat jati hai lekin data mehfooz rehta hai."""
+    with get_conn() as conn:
+        conn.execute("UPDATE jobs SET is_active = 0 WHERE id = ?", (job_id,))
+
+
 def add_candidate(job_id, name, email, phone, cv_path, cv_text, source) -> int:
     with get_conn() as conn:
         cur = conn.execute("""
@@ -1008,23 +1035,72 @@ def dashboard_page():
 # ---------------- POST JOB PAGE ----------------
 def post_job_page():
     st.markdown(f"#### {T('nav_post_job')}")
-    with st.form("job_form"):
-        title = st.text_input(T("job_title"))
-        description = st.text_area(T("job_description"))
-        requirements = st.text_area(T("job_requirements"), help="e.g. Python, 2 years experience, Bachelor's degree")
-        submitted = st.form_submit_button(T("post_job_button"))
+
+    # Agar edit mode mein hain, to purani values form mein pehle se bhar dein
+    editing_job_id = st.session_state.get("editing_job_id", None)
+    editing_job = get_job_by_id(editing_job_id) if editing_job_id else None
+
+    with st.form("job_form", clear_on_submit=(editing_job is None)):
+        title = st.text_input(T("job_title"), value=editing_job["title"] if editing_job else "")
+        description = st.text_area(T("job_description"), value=editing_job["description"] if editing_job else "")
+        requirements = st.text_area(
+            T("job_requirements"),
+            value=editing_job["requirements"] if editing_job else "",
+            help="e.g. Python, 2 years experience, Bachelor's degree"
+        )
+        submit_label = "Update Job" if editing_job else T("post_job_button")
+        submitted = st.form_submit_button(submit_label)
         if submitted:
             if title and requirements:
-                add_job(title, description, requirements)
-                st.success(T("job_posted_success"))
+                if editing_job:
+                    update_job(editing_job_id, title, description, requirements)
+                    st.session_state.editing_job_id = None
+                    st.success("Job updated successfully")
+                else:
+                    add_job(title, description, requirements)
+                    st.success(T("job_posted_success"))
+                st.rerun()
             else:
                 st.error("Job title and requirements are required.")
+
+    if editing_job:
+        if st.button("Cancel Edit"):
+            st.session_state.editing_job_id = None
+            st.rerun()
 
     st.markdown("#### Active Jobs")
     jobs = get_active_jobs()
     if jobs:
-        st.dataframe(pd.DataFrame([dict(j) for j in jobs])[["title", "requirements", "created_at"]],
-                     use_container_width=True, hide_index=True)
+        for j in jobs:
+            j = dict(j)
+            with st.container(border=True):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"**{j['title']}**")
+                    st.caption(j["requirements"])
+                with col2:
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        if st.button("✏️", key=f"edit_{j['id']}", help="Edit"):
+                            st.session_state.editing_job_id = j["id"]
+                            st.rerun()
+                    with b2:
+                        if st.button("🗑️", key=f"delete_{j['id']}", help="Delete"):
+                            st.session_state[f"confirm_delete_{j['id']}"] = True
+
+                if st.session_state.get(f"confirm_delete_{j['id']}", False):
+                    st.warning(f"Delete '{j['title']}'? Linked candidate records will be kept but unlinked.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Yes, delete", key=f"confirm_yes_{j['id']}"):
+                            delete_job(j["id"])
+                            st.session_state[f"confirm_delete_{j['id']}"] = False
+                            st.success("Job deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("Cancel", key=f"confirm_no_{j['id']}"):
+                            st.session_state[f"confirm_delete_{j['id']}"] = False
+                            st.rerun()
     else:
         st.info("No jobs posted yet.")
 
