@@ -872,7 +872,7 @@ CUSTOM_CSS = """
     footer {visibility: hidden;}
 
     .main {
-        background-color: #f4f6f9;
+        background: linear-gradient(180deg, #eef2f7 0%, #e4e9f2 100%);
     }
 
     .app-navbar {
@@ -880,12 +880,14 @@ CUSTOM_CSS = """
         padding: 18px 28px;
         border-radius: 10px;
         margin-bottom: 22px;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.15);
     }
     .app-navbar h1 {
         color: #ffffff;
         font-size: 26px;
         margin: 0;
         font-weight: 700;
+        letter-spacing: 0.3px;
     }
     .app-navbar p {
         color: #cbd5e1;
@@ -897,9 +899,13 @@ CUSTOM_CSS = """
         background: #ffffff;
         border-radius: 12px;
         padding: 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
         border-left: 5px solid #1e3a8a;
         text-align: center;
+        transition: transform 0.15s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
     }
     .metric-card h2 {
         font-size: 32px;
@@ -921,12 +927,13 @@ CUSTOM_CSS = """
         font-weight: 600;
     }
     .status-rejected {
-        background-color: #fee2e2;
-        color: #991b1b;
+        background-color: #fdeceb;
+        color: #b13c34;
         padding: 3px 10px;
         border-radius: 20px;
         font-size: 12px;
         font-weight: 600;
+        border: 1px solid #f3c6c2;
     }
     .status-pending {
         background-color: #fef9c3;
@@ -937,11 +944,31 @@ CUSTOM_CSS = """
         font-weight: 600;
     }
 
+    /* Sidebar background */
     section[data-testid="stSidebar"] {
         background-color: #0f172a;
     }
     section[data-testid="stSidebar"] * {
         color: #e2e8f0 !important;
+    }
+
+    /* Sidebar nav options -- bigger text, more spacing (sidebar width unchanged) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        font-size: 17px !important;
+        padding: 10px 6px !important;
+        margin-bottom: 4px !important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+        font-size: 17px !important;
+        font-weight: 500;
+    }
+
+    /* Softer, more professional error/warning styling (keeps red, less harsh) */
+    div[data-testid="stAlert"] {
+        border-radius: 10px !important;
+    }
+    div[data-testid="stAlertContentError"] {
+        color: #9f3a35 !important;
     }
 </style>
 """
@@ -972,8 +999,8 @@ def start_scheduler():
 
 start_scheduler()
 
-# ---------------- LANGUAGE SELECTOR (always visible, even on login) ----------------
-lang_options = {"English": "en", "اردو (Urdu)": "ur", "پښتو (Pashto)": "ps"}
+# ---------------- LANGUAGE SELECTOR (English + Urdu only) ----------------
+lang_options = {"English": "en", "اردو (Urdu)": "ur"}
 with st.sidebar:
     st.markdown("---")
     selected_lang_label = st.selectbox(
