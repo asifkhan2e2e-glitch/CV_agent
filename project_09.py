@@ -714,10 +714,13 @@ def process_new_cv(file_path: str, sender_email: str, source: str):
 
 # ---------------- METHOD 1: IMAP POLLING ----------------
 def check_inbox_imap():
-    """Har baar call hone par ek dafa inbox check karta hai (unseen emails)."""
+    """Har baar call hone par ek dafa inbox check karta hai (unseen emails).
+    Returns a dict with status info so the UI can show what happened."""
+    result = {"success": False, "message": "", "found": 0}
+
     if not IMAP_EMAIL or not IMAP_APP_PASSWORD:
-        print("[email_fetcher] IMAP credentials not configured, skipping IMAP check.")
-        return
+        result["message"] = "IMAP credentials not configured (IMAP_EMAIL / IMAP_APP_PASSWORD missing)."
+        return result
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
@@ -727,9 +730,13 @@ def check_inbox_imap():
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK":
             mail.logout()
-            return
+            result["message"] = "IMAP search failed."
+            return result
 
-        for num in messages[0].split():
+        ids = messages[0].split()
+        result["found"] = len(ids)
+
+        for num in ids:
             status, data = mail.fetch(num, "(RFC822)")
             if status != "OK":
                 continue
@@ -746,8 +753,15 @@ def check_inbox_imap():
                     process_new_cv(file_path, sender, "imap")
 
         mail.logout()
+        result["success"] = True
+        result["message"] = f"Checked inbox. Found {len(ids)} unread email(s)."
+        return result
+    except imaplib.IMAP4.error as e:
+        result["message"] = f"IMAP login/auth failed: {e}. Check IMAP_EMAIL and IMAP_APP_PASSWORD."
+        return result
     except Exception as e:
-        print(f"[email_fetcher] IMAP check failed: {e}")
+        result["message"] = f"IMAP check failed: {e}"
+        return result
 
 
 # ---------------- METHOD 2: GMAIL API ----------------
@@ -824,10 +838,12 @@ def check_inbox_gmail_api():
 
 
 def run_all_checks():
-    """Yeh function scheduler har 2 minute baad call karega — dono methods check honge."""
+    """Yeh function scheduler har 2 minute baad call karega — dono methods check honge.
+    Returns IMAP result dict taake UI mein status dikhaya ja sake."""
     print(f"[email_fetcher] Checking inbox at {datetime.now().isoformat()}")
-    check_inbox_imap()
+    imap_result = check_inbox_imap()
     check_inbox_gmail_api()
+    return imap_result
 
 
 # ============================================================
@@ -1015,10 +1031,26 @@ def dashboard_page():
 
     st.write("")
     if st.button("🔄 " + T("check_inbox_now")):
-        with st.spinner("Checking inbox..."):
-            run_all_checks()
-        st.success("Inbox checked.")
+        active_jobs = get_active_jobs()
+        if not active_jobs:
+            st.session_state["inbox_check_result"] = ("error",
+                "⚠️ No active job posted. Please post a job first on the 'Post Job' page — "
+                "CVs can't be matched/processed without an active job.")
+        else:
+            with st.spinner("Checking inbox..."):
+                result = run_all_checks()
+            if result["success"]:
+                st.session_state["inbox_check_result"] = ("success", f"✅ {result['message']}")
+            else:
+                st.session_state["inbox_check_result"] = ("error", f"❌ {result['message']}")
         st.rerun()
+
+    if "inbox_check_result" in st.session_state:
+        kind, msg = st.session_state.pop("inbox_check_result")
+        if kind == "success":
+            st.success(msg)
+        else:
+            st.error(msg)
 
     st.write("")
     st.markdown("#### Recent Candidates")
